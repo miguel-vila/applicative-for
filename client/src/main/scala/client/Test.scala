@@ -26,4 +26,14 @@ object Test extends App {
 
   println(resultWhenMonad)
 
+  val v3: Validation[Int] = Success(3)
+
+  pairs {
+    for {
+      x <- v1
+      y <- v2
+      z <- v3
+    } yield x + y +z
+  }
+
 }
