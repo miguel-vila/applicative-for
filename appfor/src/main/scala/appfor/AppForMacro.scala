@@ -38,19 +38,47 @@ object AppForMacroImpl {
     loop(pairs, Set.empty)
   }
 
-  def joinSegment(c: Context)(segment: List[(c.universe.ValDef, c.Tree)]): c.Tree = {
+  def joinSegment(c: Context)(pairs: Vector[(c.universe.ValDef, c.Tree)], innerExpr: c.Tree): c.Tree = {
     import c.universe._
-    segment match {
-      case List((term, expr)) => expr
-      case (term, expr)::rest =>
-        val joinedRest = joinSegment(c)(rest)
-        q"""_root_.appfor.Validation.applicativeInstance.map2()"""
-        ???
+
+    val segment = pairs.map {
+      case  (ValDef(_,termName,_,_), tree) => (termName, tree)
+    }.tails.toStream.filter(_.length > 0).reverse.tail
+
+    val joined = segment.init.foldLeft(segment.head(0)._2) { case (acc, subsegment) =>
+      println(subsegment)
+      val (term,expr) = subsegment.head
+      val termsTail = subsegment.tail.map(_._1)
+      val termsPattern = termsTail map { termName =>
+        Bind(termName, Ident(termNames.WILDCARD))
+      }
+      q"""_root_.appfor.Validation.applicativeInstance.map2($expr, $acc) {
+        case ($term, (..$termsPattern)) =>
+            ($term, ..$termsTail)
+      }"""
     }
+
+    val subsegment = segment.last
+    val (term,expr) = subsegment.head
+    val terms = subsegment.map(_._1)
+    val termsPattern = terms.tail map { termName =>
+      Bind(termName, Ident(termNames.WILDCARD))
+    }
+    println(s"FINAL TERMS PATTERN = $termsPattern")
+    println(s"---------- $term")
+    val finalExp = q"""_root_.appfor.Validation.applicativeInstance.map2($expr, $joined) {
+        case (${Bind(term, Ident(termNames.WILDCARD))}, (..$termsPattern)) =>
+            $innerExpr
+      }"""
+    println(s"FINAL: $finalExp")
+    println(s"INNER: ${showRaw(innerExpr)}")
+    finalExp
+
   }
 
   def getPairs(c: Context)(valid: c.Expr[M]): (List[(c.universe.ValDef, c.Tree)], c.Tree) = {
     import c.universe._
+
     val Apply(TypeApply(Select(firstMonadicValue, TermName(firstFunctionName)),_), List(continuation)) = valid.tree
     val Function(List(firstArgumentTerm), firstFunctionBody) = continuation
     if(firstFunctionName == "map") {
@@ -63,14 +91,19 @@ object AppForMacroImpl {
     }
   }
 
-  def getPairsImpl(c: Context)(valid: c.Expr[M]): c.Expr[M] = {
+  def getPairsImpl(c: Context)(valid: c.Expr[M]): c.Tree = {
     import c.universe._
     val (pairs, inner) = getPairs(c)(valid)
-    println(s"pairs = $pairs")
+    val joined = joinSegment(c)(pairs.toVector, inner)
+    println(s" joined = $joined")
+    joined
+    /*
+     println(s"pairs = $pairs")
+    println(s"inner = $inner")
     val (firstSegment, rest) = getFirstSegment(c)(pairs)
     println(s"firstSegment =$firstSegment")
     println(s"rest =$rest")
-    valid
+    */
   }
 
   def app_for_impl(c: Context)(valid: c.Expr[M]): c.Expr[M] = {
@@ -101,7 +134,7 @@ object AppForMacro {
   def app_for(valid: M): M =
     macro AppForMacroImpl.app_for_impl
 
-  def pairs(valid: M): M =
+  def pairs(valid: M): Any =
     macro AppForMacroImpl.getPairsImpl
 
 }
